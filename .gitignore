@@ -1,0 +1,10 @@
+APKEditor.jar
+revanced
+output
+
+*.apk
+*.apkm
+*.xapk
+
+*temp*
+*tmp*

@@ -12,40 +12,133 @@ cleanup() {
     mv "${strings_file}.original" "$strings_file"
   fi
   # Remove any intermediate files
-  rm -f "${base_name}"_*_unsigned.apk "${base_name}"_*_aligned.apk
+  rm -f "output/${base_name}"_*_unsigned.apk "output/${base_name}"_*_aligned.apk
   exit 1
 }
 trap cleanup INT
 
+# Check for required tools
+command -v apksigner >/dev/null 2>&1 || {
+  echo "Error: apksigner is required but not installed. Please install Android SDK Build Tools."
+  exit 1
+}
+command -v zipalign >/dev/null 2>&1 || {
+  echo "Error: zipalign is required but not installed. Please install Android SDK Build Tools."
+  exit 1
+}
+
+# Create output directory
+mkdir -p output
+
+# Download latest APKEditor if not present
+if [ ! -f "APKEditor.jar" ]; then
+  echo "Downloading latest APKEditor..."
+  APKEDITOR_URL=$(curl -s https://api.github.com/repos/REAndroid/APKEditor/releases/latest | grep -o 'https://.*APKEditor.*\.jar"' | sed 's/"$//')
+  if [ -z "$APKEDITOR_URL" ]; then
+    echo "Error: Could not find APKEditor download URL"
+    exit 1
+  fi
+  echo "Downloading from: $APKEDITOR_URL"
+  curl -L -o APKEditor.jar "$APKEDITOR_URL"
+  if [ ! -f "APKEditor.jar" ]; then
+    echo "Error: Failed to download APKEditor"
+    exit 1
+  fi
+fi
+
+# Parse command line options
+no_revanced=false
+while getopts "n-:" opt; do
+  case $opt in
+  n)
+    no_revanced=true
+    ;;
+  -)
+    case "${OPTARG}" in
+    no-revanced)
+      no_revanced=true
+      ;;
+    *)
+      echo "Invalid option: --${OPTARG}" >&2
+      exit 1
+      ;;
+    esac
+    ;;
+  \?)
+    echo "Invalid option: -$OPTARG" >&2
+    exit 1
+    ;;
+  esac
+done
+shift $((OPTIND - 1))
+
 # Check if at least 2 arguments are provided
 if [ "$#" -lt 2 ]; then
-  echo "Usage: $0 <input_file> <suffix1> [suffix2 ...]"
+  echo "Usage: $0 [-n|--no-revanced] <input_file> <suffix1> [suffix2 ...]"
+  echo "Options:"
+  echo "  -n, --no-revanced    Disable ReVanced support"
   exit 1
 fi
 
 # ReVanced setup
 REVANCED_DIR="revanced"
-if [ ! -d "$REVANCED_DIR" ]; then
-  echo "Setting up ReVanced environment..."
+if [ "$no_revanced" = false ]; then
   mkdir -p "$REVANCED_DIR"
   cd "$REVANCED_DIR"
 
-  # Download latest ReVanced tools
-  echo "Downloading ReVanced tools..."
-  # CLI
-  CLI_URL=$(curl -s https://api.github.com/repos/revanced/revanced-cli/releases/latest | grep -o 'https://.*all\.jar"' | sed 's/"$//')
-  echo "Downloading CLI from: $CLI_URL"
-  curl -L -o revanced-cli.jar "$CLI_URL"
+  # Function to get latest version from GitHub release
+  get_latest_version() {
+    curl -s "https://api.github.com/repos/$1/releases/latest" | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4
+  }
 
-  # Patches
-  PATCHES_URL=$(curl -s https://api.github.com/repos/revanced/revanced-patches/releases/latest | grep -o 'https://.*\.rvp"' | sed 's/"$//')
-  echo "Downloading patches from: $PATCHES_URL"
-  curl -L -o revanced-patches.rvp "$PATCHES_URL"
+  # Function to get current version from file
+  get_current_version() {
+    if [ -f "$1" ]; then
+      java -jar "$1" --version 2>/dev/null || echo "0"
+    else
+      echo "0"
+    fi
+  }
 
-  # Integrations
-  INTEGRATIONS_URL=$(curl -s https://api.github.com/repos/revanced/revanced-integrations/releases/latest | grep -o 'https://.*\.apk"' | sed 's/"$//')
-  echo "Downloading integrations from: $INTEGRATIONS_URL"
-  curl -L -o revanced-integrations.apk "$INTEGRATIONS_URL"
+  # Check and update CLI
+  echo "Checking ReVanced CLI version..."
+  LATEST_CLI_VERSION=$(get_latest_version "revanced/revanced-cli")
+  CURRENT_CLI_VERSION=$(get_current_version "revanced-cli.jar")
+
+  if [ "$LATEST_CLI_VERSION" != "$CURRENT_CLI_VERSION" ]; then
+    echo "Updating CLI from $CURRENT_CLI_VERSION to $LATEST_CLI_VERSION..."
+    CLI_URL=$(curl -s https://api.github.com/repos/revanced/revanced-cli/releases/latest | grep -o 'https://.*all\.jar"' | sed 's/"$//')
+    curl -L -o revanced-cli.jar "$CLI_URL"
+  else
+    echo "ReVanced CLI is up to date ($CURRENT_CLI_VERSION)"
+  fi
+
+  # Check and update Patches
+  echo "Checking ReVanced Patches version..."
+  LATEST_PATCHES_VERSION=$(get_latest_version "revanced/revanced-patches")
+  CURRENT_PATCHES_VERSION=$(get_current_version "revanced-patches.rvp")
+
+  if [ "$LATEST_PATCHES_VERSION" != "$CURRENT_PATCHES_VERSION" ]; then
+    echo "Updating Patches from $CURRENT_PATCHES_VERSION to $LATEST_PATCHES_VERSION..."
+    PATCHES_URL=$(curl -s https://api.github.com/repos/revanced/revanced-patches/releases/latest | grep -o 'https://.*\.rvp"' | sed 's/"$//')
+    curl -L -o revanced-patches.rvp "$PATCHES_URL"
+  else
+    echo "ReVanced Patches are up to date ($CURRENT_PATCHES_VERSION)"
+  fi
+
+  # Check and update Integrations
+  echo "Checking ReVanced Integrations version..."
+  LATEST_INTEGRATIONS_VERSION=$(get_latest_version "revanced/revanced-integrations")
+  CURRENT_INTEGRATIONS_VERSION=$(get_current_version "revanced-integrations.apk")
+
+  if [ "$LATEST_INTEGRATIONS_VERSION" != "$CURRENT_INTEGRATIONS_VERSION" ]; then
+    echo "Updating Integrations from $CURRENT_INTEGRATIONS_VERSION to $LATEST_INTEGRATIONS_VERSION..."
+    INTEGRATIONS_URL=$(curl -s https://api.github.com/repos/revanced/revanced-integrations/releases/latest | grep -o 'https://.*\.apk"' | sed 's/"$//')
+    curl -L -o revanced-integrations.apk "$INTEGRATIONS_URL"
+  else
+    echo "ReVanced Integrations are up to date ($CURRENT_INTEGRATIONS_VERSION)"
+  fi
+
   cd ..
 fi
 
@@ -56,15 +149,15 @@ shift
 # Get base name without extension
 base_name="${input_file%.*}"
 extension="${input_file##*.}"
-decompile_dir="${base_name}_decompile_xml"
+decompile_dir="output/${base_name}_decompile_xml"
 
 # Only perform conversion and decompilation if the directory doesn't exist
 if [ ! -d "$decompile_dir" ]; then
   # If file is APKM, convert to APK first
   if [ "$extension" = "apkm" ]; then
     echo "Converting APKM to APK..."
-    java -jar APKEditor.jar m -i "$input_file" -o "${base_name}.apk"
-    input_file="${base_name}.apk"
+    java -jar APKEditor.jar m -i "$input_file" -o "output/${base_name}.apk"
+    input_file="output/${base_name}.apk"
   fi
 
   # After getting input file but before processing
@@ -73,7 +166,7 @@ if [ ! -d "$decompile_dir" ]; then
 
   # Decompile the APK (without -t xml to get everything)
   echo "Decompiling APK..."
-  java -jar APKEditor.jar d -i "$input_file"
+  java -jar APKEditor.jar d -i "$input_file" -o "$decompile_dir"
 else
   echo "Using existing decompiled files in ${decompile_dir}"
 fi
@@ -96,9 +189,9 @@ fi
 escaped_package=$(echo "$original_package" | sed 's/\./\\./g')
 
 # Check if debug.keystore exists, if not create it
-if [ ! -f "debug.keystore" ]; then
+if [ ! -f "output/debug.keystore" ]; then
   echo "Creating debug keystore..."
-  keytool -genkey -v -keystore debug.keystore \
+  keytool -genkey -v -keystore output/debug.keystore \
     -alias androiddebugkey \
     -keyalg RSA -keysize 2048 -validity 10000 \
     -dname "CN=Android Debug,O=Android,C=US" \
@@ -144,15 +237,15 @@ for suffix in "$@"; do
   fi
 
   # Build new APK with specified output name
-  java -jar APKEditor.jar b -framework-version 34 -i "$decompile_dir" -o "${base_name}_${suffix}_unsigned.apk"
+  java -jar APKEditor.jar b -framework-version 34 -i "$decompile_dir" -o "output/${base_name}_${suffix}_unsigned.apk"
 
   # Zipalign the APK
   echo "Zipaligning APK..."
-  zipalign -v -p 4 "${base_name}_${suffix}_unsigned.apk" "${base_name}_${suffix}_aligned.apk"
+  zipalign -v -p 4 "output/${base_name}_${suffix}_unsigned.apk" "output/${base_name}_${suffix}_aligned.apk"
 
   # Check if package is supported by ReVanced and apply patches if supported
-  final_apk="${base_name}_${suffix}.apk"
-  if [ -f "revanced/revanced-cli.jar" ]; then
+  final_apk="output/${base_name}_${suffix}_aligned.apk"
+  if [ "$no_revanced" = false ] && [ -f "revanced/revanced-cli.jar" ]; then
     echo "Checking if package $original_package is supported by ReVanced..."
     # List available patches and filter for app-specific ones
     available_patches=$(java -jar "revanced/revanced-cli.jar" list-patches -p "revanced/revanced-patches.rvp" -f "$original_package")
@@ -182,25 +275,24 @@ for suffix in "$@"; do
 
       if [ ${#enable_args[@]} -eq 0 ]; then
         echo "No enabled patches found for $original_package"
-        return
-      fi
-      echo
-
-      # Create patched version with all app-specific patches
-      echo "Running patch command..."
-      java -jar "revanced/revanced-cli.jar" \
-        patch \
-        -p "revanced/revanced-patches.rvp" \
-        -o "${base_name}_${suffix}_revanced.apk" \
-        --exclusive \
-        "${enable_args[@]}" \
-        "${base_name}_${suffix}_aligned.apk"
-
-      if [ -f "${base_name}_${suffix}_revanced.apk" ]; then
-        echo "Successfully patched APK with ReVanced"
-        final_apk="${base_name}_${suffix}_revanced.apk"
+        echo "Skipping ReVanced patching"
       else
-        echo "Failed to patch APK with ReVanced, will use unpatched version"
+        # Create patched version with all app-specific patches
+        echo "Running patch command..."
+        java -jar "revanced/revanced-cli.jar" \
+          patch \
+          -p "revanced/revanced-patches.rvp" \
+          -o "output/${base_name}_${suffix}_revanced.apk" \
+          --exclusive \
+          "${enable_args[@]}" \
+          "${final_apk}"
+
+        if [ -f "output/${base_name}_${suffix}_revanced.apk" ]; then
+          echo "Successfully patched APK with ReVanced"
+          final_apk="output/${base_name}_${suffix}_revanced.apk"
+        else
+          echo "Failed to patch APK with ReVanced, will use unpatched version"
+        fi
       fi
     else
       echo "No app-specific patches found for $original_package"
@@ -209,7 +301,7 @@ for suffix in "$@"; do
 
   # Sign the final APK (either patched or unpatched)
   echo "Signing final APK..."
-  apksigner sign --ks debug.keystore \
+  apksigner sign --ks output/debug.keystore \
     --ks-key-alias androiddebugkey \
     --ks-pass pass:android \
     --key-pass pass:android \
@@ -217,18 +309,18 @@ for suffix in "$@"; do
     --v2-signing-enabled true \
     --v3-signing-enabled true \
     --v4-signing-enabled true \
-    --out "${base_name}_${suffix}_signed.apk" \
+    --out "output/${base_name}_${suffix}_signed.apk" \
     "$final_apk"
 
   # Clean up intermediate files
-  rm -f "${base_name}_${suffix}_unsigned.apk" "${base_name}_${suffix}_aligned.apk" \
-    "${base_name}_${suffix}_revanced.apk" "$final_apk"
+  rm -f "output/${base_name}_${suffix}_unsigned.apk" "output/${base_name}_${suffix}_aligned.apk" \
+    "output/${base_name}_${suffix}_revanced.apk" "$final_apk"
   # Clean up ReVanced temporary directories
-  rm -rf "${base_name}_${suffix}_revanced-temporary-files"
+  rm -rf "output/${base_name}_${suffix}_revanced-temporary-files"
 
   # Verify the signature
   echo "Verifying APK signature..."
-  apksigner verify --verbose "${base_name}_${suffix}_signed.apk"
+  apksigner verify --verbose "output/${base_name}_${suffix}_signed.apk"
 
   # Restore original manifest
   mv "${manifest_file}.original" "$manifest_file"
